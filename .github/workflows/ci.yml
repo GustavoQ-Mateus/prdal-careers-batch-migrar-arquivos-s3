@@ -53,3 +53,54 @@ jobs:
           name: imagem
           path: ${{ runner.temp }}/imagem.tar
           retention-days: 1
+
+  publicar:
+    needs: verificar
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main' && vars.AWS_ROLE_ARN != '' && needs.verificar.outputs.imagem == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    concurrency:
+      group: publicar
+      cancel-in-progress: false
+    env:
+      AWS_PROFILE: prdal-gustavo
+      AWS_REGION: us-east-1
+      ECR_REPOSITORIO: batch-migrar-arquivos-s3
+      BATCH_JOB_DEFINITION: ${{ vars.BATCH_JOB_DEFINITION }}
+    steps:
+    - uses: actions/download-artifact@v4
+      with:
+        name: imagem
+        path: ${{ runner.temp }}
+    - uses: aws-actions/configure-aws-credentials@v6
+      with:
+        role-to-assume: ${{ vars.AWS_ROLE_ARN }}
+        aws-region: us-east-1
+    - name: Conferir identidade
+      run: aws sts get-caller-identity --profile prdal-gustavo
+    - name: Publicar imagem verificada
+      id: imagem
+      env:
+        SHA: ${{ github.sha }}
+      run: |-
+        conta=$(aws sts get-caller-identity --profile prdal-gustavo --query Account --output text)
+        registro="$conta.dkr.ecr.$AWS_REGION.amazonaws.com"
+        aws ecr get-login-password --profile prdal-gustavo | docker login --username AWS --password-stdin "$registro"
+        docker load -i "$RUNNER_TEMP/imagem.tar"
+        imagem="$registro/$ECR_REPOSITORIO"
+        docker tag "unidade:$SHA" "$imagem:$SHA"
+        docker tag "unidade:$SHA" "$imagem:latest"
+        docker push "$imagem:$SHA"
+        docker push "$imagem:latest"
+        echo "uri=$imagem:$SHA" >> "$GITHUB_OUTPUT"
+    - name: Atualizar definicao de job
+      env:
+        IMAGEM: ${{ steps.imagem.outputs.uri }}
+      run: |-
+        test -n "$BATCH_JOB_DEFINITION"
+        aws batch describe-job-definitions --profile prdal-gustavo --job-definition-name "$BATCH_JOB_DEFINITION" --status ACTIVE > "$RUNNER_TEMP/jobs.json"
+        jq -e '.jobDefinitions | length > 0' "$RUNNER_TEMP/jobs.json"
+        jq --arg imagem "$IMAGEM" '.jobDefinitions | max_by(.revision) | del(.jobDefinitionArn,.revision,.status) | .containerProperties.image = $imagem' "$RUNNER_TEMP/jobs.json" > "$RUNNER_TEMP/job-novo.json"
+        aws batch register-job-definition --profile prdal-gustavo --cli-input-json "file://$RUNNER_TEMP/job-novo.json"
