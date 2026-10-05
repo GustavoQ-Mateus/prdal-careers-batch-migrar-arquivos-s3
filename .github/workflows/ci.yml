@@ -102,5 +102,5 @@ jobs:
         test -n "$BATCH_JOB_DEFINITION"
         aws batch describe-job-definitions --profile prdal-gustavo --job-definition-name "$BATCH_JOB_DEFINITION" --status ACTIVE > "$RUNNER_TEMP/jobs.json"
         jq -e '.jobDefinitions | length > 0' "$RUNNER_TEMP/jobs.json"
-        jq --arg imagem "$IMAGEM" '.jobDefinitions | max_by(.revision) | del(.jobDefinitionArn,.revision,.status) | .containerProperties.image = $imagem' "$RUNNER_TEMP/jobs.json" > "$RUNNER_TEMP/job-novo.json"
+          jq --arg imagem "$IMAGEM" '.jobDefinitions | max_by(.revision) | {jobDefinitionName,type,parameters,containerProperties,nodeProperties,retryStrategy,propagateTags,timeout,tags,platformCapabilities,eksProperties,ecsProperties,schedulingPriority} | with_entries(select(.value != null)) | .containerProperties.image = $imagem' "$RUNNER_TEMP/jobs.json" > "$RUNNER_TEMP/job-novo.json"
         aws batch register-job-definition --profile prdal-gustavo --cli-input-json "file://$RUNNER_TEMP/job-novo.json"
